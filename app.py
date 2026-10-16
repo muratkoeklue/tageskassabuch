@@ -1158,4 +1158,3 @@ if save_trigger:
 
     st.session_state.daily_sheets[date_str] = record_payload
     st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} dauerhaft in der Cloud gesichert!")
->>>>>>> 14f7ca63d49864694445a4df585a1dff4239e5eb
