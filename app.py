@@ -40,7 +40,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # --- SUPABASE DATENBANK VERBINDUNG ---
 @st.cache_resource
 def init_supabase() -> Client:
-    # Zugangsdaten entweder aus Streamlit Secrets oder direkt laden
     url = st.secrets.get("SUPABASE_URL", "") if "SUPABASE_URL" in st.secrets else ""
     key = st.secrets.get("SUPABASE_KEY", "") if "SUPABASE_KEY" in st.secrets else ""
     if not url or not key:
@@ -49,7 +48,6 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-# Fallback-Anzeige, falls Secrets noch nicht konfiguriert
 if not supabase:
     st.sidebar.warning("⚠️ Supabase API-Zugangsdaten nicht gefunden! Bitte in den Streamlit Cloud Secrets hinterlegen.")
 
@@ -229,7 +227,6 @@ if supabase:
     if res.data:
         profile_data = res.data[0]
     else:
-        # Einmaliges Anlegen eines neuen Unternehmens
         supabase.table("company_profiles").insert({
             "company_code": company_code_input,
             "company_name": company_code_input,
@@ -247,7 +244,17 @@ if supabase:
 
 st.sidebar.success(f"Angemeldet als: **{company_code_input}**")
 
-selected_date = st.sidebar.date_input("📅 Datum wählen", value=datetime.today())
+# ÜBERPRÜFUNG OB EIN TAG AUS DER LISTE ZUM BEARBEITEN GEWÄHLT WURDE
+if "selected_edit_date" not in st.session_state:
+    st.session_state.selected_edit_date = None
+
+if st.session_state.selected_edit_date:
+    default_date_val = datetime.strptime(st.session_state.selected_edit_date, "%Y-%m-%d").date()
+    st.session_state.selected_edit_date = None # Reset nach Übernahme
+else:
+    default_date_val = datetime.today()
+
+selected_date = st.sidebar.date_input("📅 Datum wählen", value=default_date_val)
 date_str = selected_date.strftime("%Y-%m-%d")
 
 # DATEN FÜR DIESEN MANDANTEN AUS SUPABASE LADEN
@@ -326,16 +333,22 @@ with st.sidebar.expander("⚙️ Steuerberater-Stammdaten (DATEV/BMD)"):
             st.success("Stammdaten in Datenbank gesichert!")
             st.rerun()
 
-# DROPDOWN ERFASSTE TAGESBLÄTTER
-with st.sidebar.expander("📁 Erfasste Tagesblätter (Datenzeilen)"):
+# DROPDOWN ERFASSTE TAGESBLÄTTER MIT BEARBEITUNGS-OPTION
+with st.sidebar.expander("📁 Erfasste Tagesblätter (Bearbeiten)"):
     if len(st.session_state.daily_sheets) > 0:
         df_side = pd.DataFrame(list(st.session_state.daily_sheets.values()))
         df_side["Datum_Obj"] = pd.to_datetime(df_side["datum"])
-        df_side = df_side.sort_values("Datum_Obj").reset_index(drop=True)
+        df_side = df_side.sort_values("Datum_Obj", ascending=False).reset_index(drop=True)
         
-        display_side = df_side[["datum", "anfangsstand", "tageslosung", "bareinlage", "einkauf", "barentnahme", "endstand"]].copy()
-        display_side.columns = ["Datum", "Anfang", "Losung", "Einlage", "Einkauf", "Entnahme", "Endstand"]
-        st.dataframe(display_side, use_container_width=True)
+        st.markdown("Wähle einen Tag zum Bearbeiten:")
+        for _, r in df_side.iterrows():
+            d_val = str(r["datum"])
+            end_val = float(r["endstand"])
+            col_d_txt, col_d_btn = st.columns([2, 1])
+            col_d_txt.text(f"{d_val} ({end_val:.2f}€)")
+            if col_d_btn.button("✏️ Laden", key=f"edit_btn_{d_val}"):
+                st.session_state.selected_edit_date = d_val
+                st.rerun()
     else:
         st.info("Noch keine Daten erfasst.")
 
@@ -634,7 +647,7 @@ with col1:
 with col2:
     note_einzahlung_bank = st.text_input("Bemerkung zu Einzahlung Bank", value=st.session_state.inp_notes_dict.get("einzahlung_bank", ""), key="note_einzahlung_bank")
 
-# SPEICHERN IN SUPABASE DATENBANK
+# SPEICHERN / AKTUALISIEREN IN SUPABASE DATENBANK
 if save_trigger:
     notes_dict = {
         "anfangsstand": note_anfangsstand,
@@ -680,4 +693,4 @@ if save_trigger:
         supabase.table("daily_sheets").upsert(record_payload, on_conflict="company_code, datum").execute()
 
     st.session_state.daily_sheets[date_str] = record_payload
-    st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} dauerhaft in der Cloud gesichert!")
+    st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} erfolgreich aktualisiert und in der Cloud gespeichert!")
