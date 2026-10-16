@@ -19,7 +19,7 @@ from supabase import create_client, Client
 # Seitenkonfiguration
 st.set_page_config(page_title="Tages-Kassabuch (Multi-Tenant)", page_icon="💶", layout="wide")
 
-# CSS für fixierten Header (Kassenstand + Speichern-Button bleiben beim Scrollen oben)
+# CSS für fixierten Header
 st.markdown("""
 <style>
     div[data-testid="stVerticalBlock"] > div:has(div.sticky-header-marker) {
@@ -40,16 +40,17 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # --- SUPABASE DATENBANK VERBINDUNG ---
 @st.cache_resource
 def init_supabase() -> Client:
-    # Zugangsdaten entweder aus Streamlit Secrets oder direkt laden
     url = st.secrets.get("SUPABASE_URL", "") if "SUPABASE_URL" in st.secrets else ""
     key = st.secrets.get("SUPABASE_KEY", "") if "SUPABASE_KEY" in st.secrets else ""
     if not url or not key:
         return None
-    return create_client(url, key)
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
 
 supabase = init_supabase()
 
-# Fallback-Anzeige, falls Secrets noch nicht konfiguriert
 if not supabase:
     st.sidebar.warning("⚠️ Supabase API-Zugangsdaten nicht gefunden! Bitte in den Streamlit Cloud Secrets hinterlegen.")
 
@@ -222,32 +223,43 @@ if not company_code_input:
     st.info("👈 Bitte gib links deinen Unternehmens-Code ein, um auf dein Kassabuch zuzugreifen.")
     st.stop()
 
-# STAMMDATEN DES UNTERNEHMENS LADEN / ANLEGEN
+# STAMMDATEN DES UNTERNEHMENS SICHER LADEN / ANLEGEN
 profile_data = {}
 if supabase:
-    res = supabase.table("company_profiles").select("*").eq("company_code", company_code_input).execute()
-    if res.data:
-        profile_data = res.data[0]
-    else:
-        # Einmaliges Anlegen eines neuen Unternehmens
-        supabase.table("company_profiles").insert({
-            "company_code": company_code_input,
-            "company_name": company_code_input,
-            "datev_user": "user",
-            "datev_berater": "503865",
-            "datev_klient": "10288"
-        }).execute()
-        profile_data = {
-            "company_code": company_code_input,
-            "company_name": company_code_input,
-            "datev_user": "user",
-            "datev_berater": "503865",
-            "datev_klient": "10288"
-        }
+    try:
+        res = supabase.table("company_profiles").select("*").eq("company_code", company_code_input).execute()
+        if res.data:
+            profile_data = res.data[0]
+        else:
+            supabase.table("company_profiles").insert({
+                "company_code": company_code_input,
+                "company_name": company_code_input,
+                "datev_user": "user",
+                "datev_berater": "503865",
+                "datev_klient": "10288"
+            }).execute()
+            profile_data = {
+                "company_code": company_code_input,
+                "company_name": company_code_input,
+                "datev_user": "user",
+                "datev_berater": "503865",
+                "datev_klient": "10288"
+            }
+    except Exception as e:
+        st.sidebar.error(f"Datenbankfehler: {e}")
 
 st.sidebar.success(f"Angemeldet als: **{company_code_input}**")
 
-selected_date = st.sidebar.date_input("📅 Datum wählen", value=datetime.today())
+if "selected_edit_date" not in st.session_state:
+    st.session_state.selected_edit_date = None
+
+if st.session_state.selected_edit_date:
+    default_date_val = datetime.strptime(st.session_state.selected_edit_date, "%Y-%m-%d").date()
+    st.session_state.selected_edit_date = None
+else:
+    default_date_val = datetime.today()
+
+selected_date = st.sidebar.date_input("📅 Datum wählen", value=default_date_val)
 date_str = selected_date.strftime("%Y-%m-%d")
 
 # DATEN FÜR DIESEN MANDANTEN AUS SUPABASE LADEN
@@ -255,9 +267,12 @@ if "daily_sheets" not in st.session_state or st.session_state.get("active_compan
     st.session_state.active_company = company_code_input
     st.session_state.daily_sheets = {}
     if supabase:
-        sheets_res = supabase.table("daily_sheets").select("*").eq("company_code", company_code_input).execute()
-        for row in sheets_res.data:
-            st.session_state.daily_sheets[str(row["datum"])] = row
+        try:
+            sheets_res = supabase.table("daily_sheets").select("*").eq("company_code", company_code_input).execute()
+            for row in sheets_res.data:
+                st.session_state.daily_sheets[str(row["datum"])] = row
+        except Exception:
+            pass
 
 prev_date_str = (selected_date - timedelta(days=1)).strftime("%Y-%m-%d")
 auto_anfangsstand = 0.0
@@ -307,7 +322,7 @@ if date_str not in st.session_state.temp_receipts:
 
 st.sidebar.divider()
 
-# --- FIRMEN-STAMMDATEN EINMALIG EINGEBEN & SPEICHERN ---
+# --- FIRMEN-STAMMDATEN ---
 with st.sidebar.expander("⚙️ Steuerberater-Stammdaten (DATEV/BMD)"):
     st.caption("Einmalig eingeben – bleibt dauerhaft für diesen Unternehmens-Code gespeichert!")
     p_name = st.text_input("Firmenname", value=profile_data.get("company_name", company_code_input))
@@ -317,29 +332,38 @@ with st.sidebar.expander("⚙️ Steuerberater-Stammdaten (DATEV/BMD)"):
     
     if st.button("💾 Stammdaten dauerhaft speichern"):
         if supabase:
-            supabase.table("company_profiles").update({
-                "company_name": p_name,
-                "datev_user": d_user,
-                "datev_berater": d_berater,
-                "datev_klient": d_klient
-            }).eq("company_code", company_code_input).execute()
-            st.success("Stammdaten in Datenbank gesichert!")
-            st.rerun()
+            try:
+                supabase.table("company_profiles").update({
+                    "company_name": p_name,
+                    "datev_user": d_user,
+                    "datev_berater": d_berater,
+                    "datev_klient": d_klient
+                }).eq("company_code", company_code_input).execute()
+                st.success("Stammdaten in Datenbank gesichert!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Fehler beim Speichern: {e}")
 
-# DROPDOWN ERFASSTE TAGESBLÄTTER
-with st.sidebar.expander("📁 Erfasste Tagesblätter (Datenzeilen)"):
+# ERFASSTE TAGESBLÄTTER (BEARBEITEN)
+with st.sidebar.expander("📁 Erfasste Tagesblätter (Bearbeiten)"):
     if len(st.session_state.daily_sheets) > 0:
         df_side = pd.DataFrame(list(st.session_state.daily_sheets.values()))
         df_side["Datum_Obj"] = pd.to_datetime(df_side["datum"])
-        df_side = df_side.sort_values("Datum_Obj").reset_index(drop=True)
+        df_side = df_side.sort_values("Datum_Obj", ascending=False).reset_index(drop=True)
         
-        display_side = df_side[["datum", "anfangsstand", "tageslosung", "bareinlage", "einkauf", "barentnahme", "endstand"]].copy()
-        display_side.columns = ["Datum", "Anfang", "Losung", "Einlage", "Einkauf", "Entnahme", "Endstand"]
-        st.dataframe(display_side, use_container_width=True)
+        st.markdown("Wähle einen Tag zum Bearbeiten:")
+        for _, r in df_side.iterrows():
+            d_val = str(r["datum"])
+            end_val = float(r["endstand"])
+            col_d_txt, col_d_btn = st.columns([2, 1])
+            col_d_txt.text(f"{d_val} ({end_val:.2f}€)")
+            if col_d_btn.button("✏️ Laden", key=f"edit_btn_{d_val}"):
+                st.session_state.selected_edit_date = d_val
+                st.rerun()
     else:
         st.info("Noch keine Daten erfasst.")
 
-# DROPDOWN STEUERBERATER-SCHNITTSTELLE & EXPORTE
+# STEUERBERATER-SCHNITTSTELLE & EXPORTE
 with st.sidebar.expander("📊 Steuerberater-Schnittstelle & Exporte"):
     st.markdown("##### 📄 PDF-Protokolle erstellen")
     if len(st.session_state.daily_sheets) > 0:
@@ -499,10 +523,8 @@ st.markdown(f"### Tagesblatt für den **{selected_date.strftime('%d.%m.%Y')}**")
 saved_einkauf = st.session_state.daily_sheets.get(date_str, {}).get("einkauf", 0.0)
 final_einkauf = calculated_total_einkauf if calculated_total_einkauf > 0 else float(saved_einkauf)
 
-# PLACEHOLDER FÜR ANZEIGE DER STICKY-LEISTE
 header_container = st.container()
 
-# AKTUELLE WERTE AUS SESSION STATE ABFRAGEN
 anfangsstand = float(st.session_state.get("inp_anfangsstand", auto_anfangsstand))
 tageslosung = float(st.session_state.get("inp_tageslosung", 0.0))
 bareinlage = float(st.session_state.get("inp_bareinlage", 0.0))
@@ -519,13 +541,11 @@ barentnahme = float(st.session_state.get("inp_barentnahme", 0.0))
 loehne_vorschuesse = float(st.session_state.get("inp_loehne_vorschuesse", 0.0))
 einzahlung_bank = float(st.session_state.get("inp_einzahlung_bank", 0.0))
 
-# BERECHNUNG DES LIVE-STANDES
 live_zwischenstand = (anfangsstand + tageslosung + bareinlage + bar_boniert + essensbons_ueb 
                      - bankomatkasse - unbar_ueb - essenbons - trinkgeld_ma 
                      - gaestereklamation - einkauf - barentnahme - loehne_vorschuesse)
 live_endstand = live_zwischenstand - einzahlung_bank
 
-# FIXIERTER KOPFBEREICH MIT KASSENSTAND UND SAVE-BUTTON
 with header_container:
     st.markdown('<div class="sticky-header-marker"></div>', unsafe_allow_html=True)
     m_col1, m_col2, m_col3, btn_col = st.columns([1, 1, 1, 1.2])
@@ -540,7 +560,6 @@ with header_container:
 
 st.markdown("---")
 
-# EINGABEMASKE
 st.markdown("#### 1. Einnahmen & Hinzurechnungen")
 
 col1, col2 = st.columns([1, 1])
@@ -634,7 +653,6 @@ with col1:
 with col2:
     note_einzahlung_bank = st.text_input("Bemerkung zu Einzahlung Bank", value=st.session_state.inp_notes_dict.get("einzahlung_bank", ""), key="note_einzahlung_bank")
 
-# SPEICHERN IN SUPABASE DATENBANK
 if save_trigger:
     notes_dict = {
         "anfangsstand": note_anfangsstand,
@@ -677,7 +695,9 @@ if save_trigger:
     }
 
     if supabase:
-        supabase.table("daily_sheets").upsert(record_payload, on_conflict="company_code, datum").execute()
-
-    st.session_state.daily_sheets[date_str] = record_payload
-    st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} dauerhaft in der Cloud gesichert!")
+        try:
+            supabase.table("daily_sheets").upsert(record_payload, on_conflict="company_code, datum").execute()
+            st.session_state.daily_sheets[date_str] = record_payload
+            st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} erfolgreich gespeichert!")
+        except Exception as e:
+            st.error(f"Fehler beim Speichern in der Datenbank: {e}")
