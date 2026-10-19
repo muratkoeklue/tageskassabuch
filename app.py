@@ -532,4 +532,7 @@ with st.sidebar.expander("✉️ E-Mail Versand"):
                             f_name = f"Kassabuch_{company_code_input}_{m_start}_bis_{m_end}.pdf"
                         elif f_type == "DATEV EXTF":
                             f_data = generate_datev_at_csv(df_m_p, d_user, d_berater, d_klient, m_start, m_end).encode("cp1252", errors="replace")
-                            f_name = f"EXTF_Kassabuch_{company_code_input}_{m_start}_bis_{m
+                            f_name = f"EXTF_Kassabuch_{company_code_input}_{m_start}_bis_{m_end}.csv"
+                        elif f_type == "BMD CSV":
+                            f_data = generate_bmd_at_csv(df_m_p).encode("cp1252", errors="replace")
+                            f_name = f"BMD_Kassabuch_{company_code_input}_{m_start}_bis_{m_end}.csv"
