@@ -250,7 +250,7 @@ if supabase:
 
 st.sidebar.success(f"Angemeldet als: **{company_code_input}**")
 
-# Prüfen ob eingeloggter Nutzer Administrator ist
+# Prüfen ob Administrator eingeloggt ist
 is_admin = (company_code_input == "KASSABUCH-ADMIN")
 
 # --- ADMIN BEREICH (WENN ADMIN EINGELOGGT) ---
@@ -288,7 +288,7 @@ if is_admin:
                             st.success(f"Mandant '{new_code}' ({new_name}) wurde erfolgreich angelegt!")
                         except Exception as e:
                             st.error(f"Fehler beim Anlegen: {e}")
-        st.stop() # Stoppt die normale Kassa-Ansicht, damit der Admin komfortabel anlegen kann
+        st.stop()
 
 if "selected_edit_date" not in st.session_state:
     st.session_state.selected_edit_date = None
@@ -536,3 +536,208 @@ with st.sidebar.expander("✉️ E-Mail Versand"):
                         elif f_type == "BMD CSV":
                             f_data = generate_bmd_at_csv(df_m_p).encode("cp1252", errors="replace")
                             f_name = f"BMD_Kassabuch_{company_code_input}_{m_start}_bis_{m_end}.csv"
+
+                        if f_data:
+                            part = MIMEBase('application', 'octet-stream')
+                            part.set_payload(f_data)
+                            encoders.encode_base64(part)
+                            part.add_header('Content-Disposition', f'attachment; filename="{f_name}"')
+                            msg.attach(part)
+
+                        server = smtplib.SMTP(s_server, int(s_port))
+                        server.starttls()
+                        server.login(s_mail, s_pass)
+                        server.send_message(msg)
+                        server.quit()
+                        st.success("E-Mail versendet!")
+                    except Exception as ex:
+                        st.error(f"Fehler: {ex}")
+    else:
+        st.info("Keine Daten erfasst.")
+
+
+# --- HAUPTBEREICH: DIREKTE ECHTZEIT-EINGABEMASKE ---
+st.title(f"💶 Tages-Kassabuch: {profile_data.get('company_name', company_code_input)}")
+st.markdown(f"### Tagesblatt für den **{selected_date.strftime('%d.%m.%Y')}**")
+
+saved_einkauf = st.session_state.daily_sheets.get(date_str, {}).get("einkauf", 0.0)
+final_einkauf = calculated_total_einkauf if calculated_total_einkauf > 0 else float(saved_einkauf)
+
+header_container = st.container()
+
+anfangsstand = float(st.session_state.get("inp_anfangsstand", auto_anfangsstand))
+tageslosung = float(st.session_state.get("inp_tageslosung", 0.0))
+bareinlage = float(st.session_state.get("inp_bareinlage", 0.0))
+bar_boniert = float(st.session_state.get("inp_bar_boniert", 0.0))
+essensbons_ueb = float(st.session_state.get("inp_essensbons_ueb", 0.0))
+
+bankomatkasse = float(st.session_state.get("inp_bankomatkasse", 0.0))
+unbar_ueb = float(st.session_state.get("inp_unbar_ueb", 0.0))
+essenbons = float(st.session_state.get("inp_essenbons", 0.0))
+trinkgeld_ma = float(st.session_state.get("inp_trinkgeld_ma", 0.0))
+gaestereklamation = float(st.session_state.get("inp_gaestereklamation", 0.0))
+einkauf = final_einkauf
+barentnahme = float(st.session_state.get("inp_barentnahme", 0.0))
+loehne_vorschuesse = float(st.session_state.get("inp_loehne_vorschuesse", 0.0))
+einzahlung_bank = float(st.session_state.get("inp_einzahlung_bank", 0.0))
+
+live_zwischenstand = (anfangsstand + tageslosung + bareinlage + bar_boniert + essensbons_ueb 
+                     - bankomatkasse - unbar_ueb - essenbons - trinkgeld_ma 
+                     - gaestereklamation - einkauf - barentnahme - loehne_vorschuesse)
+live_endstand = live_zwischenstand - einzahlung_bank
+
+with header_container:
+    st.markdown('<div class="sticky-header-marker"></div>', unsafe_allow_html=True)
+    m_col1, m_col2, m_col3, btn_col = st.columns([1, 1, 1, 1.2])
+    
+    m_col1.metric("Anfangsstand", f"{anfangsstand:.2f} €")
+    m_col2.metric("Zwischenstand", f"{live_zwischenstand:.2f} €")
+    m_col3.metric("🔴 LIVE-KASSENSTAND", f"{live_endstand:.2f} €", delta=f"{live_endstand - anfangsstand:.2f} €")
+    
+    with btn_col:
+        st.write("")
+        save_trigger = st.button("💾 Tagesblatt in Cloud speichern", type="primary", use_container_width=True)
+
+st.markdown("---")
+
+st.markdown("#### 1. Einnahmen & Hinzurechnungen")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    anfangsstand = st.number_input("Anfangsstand - Übertrag v. Vortag (€)", key="inp_anfangsstand", step=10.0)
+with col2:
+    note_anfangsstand = st.text_input("Bemerkung zu Anfangsstand", value=st.session_state.inp_notes_dict.get("anfangsstand", ""), key="note_anfangsstand")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    tageslosung = st.number_input("Tageslosung (Brutto) (€)", key="inp_tageslosung", step=10.0)
+with col2:
+    note_tageslosung = st.text_input("Bemerkung zu Tageslosung", value=st.session_state.inp_notes_dict.get("tageslosung", ""), key="note_tageslosung")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    bareinlage = st.number_input("Bareinlage (➕ Hinzurechnung) (€)", key="inp_bareinlage", step=10.0)
+with col2:
+    note_bareinlage = st.text_input("Bemerkung / Grund für Bareinlage", value=st.session_state.inp_notes_dict.get("bareinlage", ""), key="note_bareinlage")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    bar_boniert = st.number_input("bar kassiert bereits bonierte (€)", key="inp_bar_boniert", step=10.0)
+with col2:
+    note_bar_boniert = st.text_input("Bemerkung zu bar boniert", value=st.session_state.inp_notes_dict.get("bar_boniert", ""), key="note_bar_boniert")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    essensbons_ueb = st.number_input("Essensbons oder Überweisung (€)", key="inp_essensbons_ueb", step=10.0)
+with col2:
+    note_essensbons_ueb = st.text_input("Bemerkung zu Essensbons/Überw.", value=st.session_state.inp_notes_dict.get("essensbons_ueb", ""), key="note_essensbons_ueb")
+
+st.markdown("---")
+st.markdown("#### 2. Ausgaben, Abzüge & Entnahmen")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    bankomatkasse = st.number_input("abzüglich Bankomatkasse (€)", key="inp_bankomatkasse", step=10.0)
+with col2:
+    note_bankomatkasse = st.text_input("Bemerkung zu Bankomatkasse", value=st.session_state.inp_notes_dict.get("bankomatkasse", ""), key="note_bankomatkasse")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    unbar_ueb = st.number_input("abzüglich unbar Überweisung (€)", key="inp_unbar_ueb", step=10.0)
+with col2:
+    note_unbar_ueb = st.text_input("Bemerkung zu unbar Überweisung", value=st.session_state.inp_notes_dict.get("unbar_ueb", ""), key="note_unbar_ueb")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    essenbons = st.number_input("abzüglich Essenbons (€)", key="inp_essenbons", step=10.0)
+with col2:
+    note_essenbons = st.text_input("Bemerkung zu Essenbons", value=st.session_state.inp_notes_dict.get("essenbons", ""), key="note_essenbons")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    trinkgeld_ma = st.number_input("abzüglich Trinkgeld - Mitarbeiter (€)", key="inp_trinkgeld_ma", step=5.0)
+with col2:
+    note_trinkgeld_ma = st.text_input("Bemerkung zu Trinkgeld", value=st.session_state.inp_notes_dict.get("trinkgeld_ma", ""), key="note_trinkgeld_ma")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    gaestereklamation = st.number_input("abzüglich Gästereklamation (€)", key="inp_gaestereklamation", step=5.0)
+with col2:
+    note_gaestereklamation = st.text_input("Bemerkung zu Gästereklamation", value=st.session_state.inp_notes_dict.get("gaestereklamation", ""), key="note_gaestereklamation")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    st.text_input("abzüglich Einkauf / Barauslagen (Automatisch)", value=f"{final_einkauf:.2f} €", disabled=True)
+    einkauf = final_einkauf
+with col2:
+    note_einkauf = st.text_input("Bemerkung zu Einkauf", value=st.session_state.inp_notes_dict.get("einkauf", ""), key="note_einkauf")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    barentnahme = st.number_input("Barentnahme (➖ Abzug) (€)", key="inp_barentnahme", step=10.0)
+with col2:
+    note_barentnahme = st.text_input("Bemerkung / Grund für Barentnahme", value=st.session_state.inp_notes_dict.get("barentnahme", ""), key="note_barentnahme")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    loehne_vorschuesse = st.number_input("Mitarbeiter Löhne/Vorschüsse (€)", key="inp_loehne_vorschuesse", step=10.0)
+with col2:
+    note_loehne_vorschuesse = st.text_input("Bemerkung zu Löhne/Vorschüsse", value=st.session_state.inp_notes_dict.get("loehne_vorschuesse", ""), key="note_loehne_vorschuesse")
+
+st.markdown("---")
+st.markdown("#### 3. Kassaabschluss & Übertrag")
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    einzahlung_bank = st.number_input("Einzahlung an Bank (Bargeld) (€)", key="inp_einzahlung_bank", step=50.0)
+with col2:
+    note_einzahlung_bank = st.text_input("Bemerkung zu Einzahlung Bank", value=st.session_state.inp_notes_dict.get("einzahlung_bank", ""), key="note_einzahlung_bank")
+
+if save_trigger:
+    notes_dict = {
+        "anfangsstand": note_anfangsstand,
+        "tageslosung": note_tageslosung,
+        "bareinlage": note_bareinlage,
+        "bar_boniert": note_bar_boniert,
+        "essensbons_ueb": note_essensbons_ueb,
+        "bankomatkasse": note_bankomatkasse,
+        "unbar_ueb": note_unbar_ueb,
+        "essenbons": note_essenbons,
+        "trinkgeld_ma": note_trinkgeld_ma,
+        "gaestereklamation": note_gaestereklamation,
+        "einkauf": note_einkauf,
+        "barentnahme": note_barentnahme,
+        "loehne_vorschuesse": note_loehne_vorschuesse,
+        "einzahlung_bank": note_einzahlung_bank
+    }
+
+    record_payload = {
+        "company_code": company_code_input,
+        "datum": date_str,
+        "anfangsstand": anfangsstand,
+        "tageslosung": tageslosung,
+        "bareinlage": bareinlage,
+        "bar_boniert": bar_boniert,
+        "essensbons_ueberweisung": essensbons_ueb,
+        "bankomatkasse": bankomatkasse,
+        "unbar_ueberweisung": unbar_ueb,
+        "essenbons": essenbons,
+        "trinkgeld_ma": trinkgeld_ma,
+        "gaestereklamation": gaestereklamation,
+        "einkauf": einkauf,
+        "barentnahme": barentnahme,
+        "loehne_vorschuesse": loehne_vorschuesse,
+        "zwischenstand": live_zwischenstand,
+        "einzahlung_bank": einzahlung_bank,
+        "endstand": live_endstand,
+        "notes": notes_dict,
+        "receipt_items": current_receipts
+    }
+
+    if supabase:
+        try:
+            supabase.table("daily_sheets").upsert(record_payload, on_conflict="company_code, datum").execute()
+            st.session_state.daily_sheets[date_str] = record_payload
+            st.success(f"Tagesblatt für {selected_date.strftime('%d.%m.%Y')} erfolgreich gespeichert!")
+        except Exception as e:
+            st.error(f"Fehler beim Speichern in der Datenbank: {e}")
