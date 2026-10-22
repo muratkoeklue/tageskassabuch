@@ -130,6 +130,7 @@ def generate_datev_at_csv(period_df, user_val, berater_val, klient_val, start_d,
     wj_beginn = f"{start_d.year}0101"
     now_str = datetime.now().strftime("%Y%m%d%H%M%S")
     
+    # 1. Zeile (Header) bleibt exakt unverändert wie programmiert
     header_cols = [
         "EXTF", "510", "21", "Buchungsstapel", "12", now_str, "", 
         user_val, "", "", berater_val, klient_val, wj_beginn, "", 
@@ -137,33 +138,57 @@ def generate_datev_at_csv(period_df, user_val, berater_val, klient_val, start_d,
     ]
     lines = [";".join(header_cols)]
     
+    # Ab der 2. Zeile: Spaltenaufbau exakt nach DATEV-Standardvorlage (Fixwerte = "0")
     for _, r in period_df.iterrows():
         datum_fmt = pd.to_datetime(r["datum"]).strftime("%d%m")
         belegfeld = str(r["datum"]).replace("-", "")
         
+        def build_datev_row(umsatz_val, sh_kz, beleg_datum, beleg_nr, text, konto, gegenkonto):
+            u_str = f"{float(umsatz_val):.2f}".replace('.', ',')
+            # Spaltenstruktur laut DATEV-Standard mit Fixwerten ("0" bzw. leer wo erforderlich)
+            row_fields = [
+                u_str,               # 1. Umsatz
+                sh_kz,               # 2. Soll/Haben-Kennzeichen (S/H)
+                "EUR",               # 3. WKZ Umsatz
+                "0",                 # 4. Kurs (Fixwert)
+                "0",                 # 5. Basisumsatz (Fixwert)
+                "",                  # 6. WKZ Basisumsatz
+                konto,               # 7. Konto
+                gegenkonto,          # 8. Gegenkonto (ohne BU-Schlüssel)
+                "",                  # 9. BU-Schlüssel
+                beleg_datum,         # 10. Belegdatum (TTMM)
+                beleg_nr,            # 11. Belegfeld 1 (Rechnungs-/Belegnummer)
+                "0",                 # 12. Belegfeld 2 (Fixwert)
+                text,                # 13. Buchungstext
+                "0",                 # 14. Postensperre (Fixwert)
+                "0",                 # 15. Diverse Adressnummer (Fixwert)
+                "0",                 # 16. Geschäftspartnerbank (Fixwert)
+                "0",                 # 17. Mahnsperre (Fixwert)
+                "0",                 # 18. Zahlunsperre (Fixwert)
+                "0",                 # 19. Skriptsperre / Diktatkürzel (Fixwert)
+                "0",                 # 20. KOST1 (Fixwert)
+                "0",                 # 21. KOST2 (Fixwert)
+                "0"                  # 22. Kostmenge (Fixwert)
+            ]
+            return ";".join(row_fields)
+
         if float(r["tageslosung"]) > 0:
-            val_str = f"{float(r['tageslosung']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};S;EUR;;{datum_fmt};;{belegfeld};Tageslosung {r['datum']};4000;2700")
+            lines.append(build_datev_row(r['tageslosung'], "S", datum_fmt, belegfeld, f"Tageslosung {r['datum']}", "4000", "2700"))
             
         if float(r.get("bareinlage", 0.0)) > 0:
-            val_str = f"{float(r['bareinlage']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};S;EUR;;{datum_fmt};;{belegfeld};Bareinlage {r['datum']};9000;2700")
+            lines.append(build_datev_row(r['bareinlage'], "S", datum_fmt, belegfeld, f"Bareinlage {r['datum']}", "9000", "2700"))
 
         if float(r["einkauf"]) > 0:
-            val_str = f"{float(r['einkauf']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};H;EUR;;{datum_fmt};;{belegfeld};Einkauf / Barauslagen {r['datum']};5000;2700")
+            lines.append(build_datev_row(r['einkauf'], "H", datum_fmt, belegfeld, f"Einkauf / Barauslagen {r['datum']}", "5000", "2700"))
             
         if float(r.get("barentnahme", 0.0)) > 0:
-            val_str = f"{float(r['barentnahme']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};H;EUR;;{datum_fmt};;{belegfeld};Barentnahme {r['datum']};9000;2700")
+            lines.append(build_datev_row(r['barentnahme'], "H", datum_fmt, belegfeld, f"Barentnahme {r['datum']}", "9000", "2700"))
 
         if float(r["loehne_vorschuesse"]) > 0:
-            val_str = f"{float(r['loehne_vorschuesse']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};H;EUR;;{datum_fmt};;{belegfeld};Mitarbeiter Löhne/Vorschüsse {r['datum']};3700;2700")
+            lines.append(build_datev_row(r['loehne_vorschuesse'], "H", datum_fmt, belegfeld, f"Mitarbeiter Löhne/Vorschüsse {r['datum']}", "3700", "2700"))
             
         if float(r["einzahlung_bank"]) > 0:
-            val_str = f"{float(r['einzahlung_bank']):.2f}".replace('.', ',')
-            lines.append(f"{val_str};H;EUR;;{datum_fmt};;{belegfeld};Bank-Einzahlung {r['datum']};2800;2700")
+            lines.append(build_datev_row(r['einzahlung_bank'], "H", datum_fmt, belegfeld, f"Bank-Einzahlung {r['datum']}", "2800", "2700"))
             
     return "\n".join(lines)
 

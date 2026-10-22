@@ -250,6 +250,46 @@ if supabase:
 
 st.sidebar.success(f"Angemeldet als: **{company_code_input}**")
 
+# Prüfen ob Administrator eingeloggt ist
+is_admin = (company_code_input == "KASSABUCH-ADMIN")
+
+# --- ADMIN BEREICH (WENN ADMIN EINGELOGGT) ---
+if is_admin:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("👑 Admin-Bereich")
+    admin_action = st.sidebar.radio("Modus wählen:", ["Tageskassabuch", "Neue Firma / Mandanten anlegen"])
+    
+    if admin_action == "Neue Firma / Mandanten anlegen":
+        st.title("➕ Neue Firma / Mandanten anlegen")
+        st.write("Erstelle hier einen neuen Firmen-Code für deine Kunden.")
+        
+        with st.form("new_company_form"):
+            new_code = st.text_input("Neuer Unternehmens-Code (z.B. RESTAURANT-XY)").strip().upper()
+            new_name = st.text_input("Firmenname / Anzeigename")
+            d_user_new = st.text_input("DATEV Benutzer", value="user")
+            d_berater_new = st.text_input("Beraternummer", value="503865")
+            d_klient_new = st.text_input("Mandantennummer", value="10288")
+            
+            submit_new = st.form_submit_button("Firma in Datenbank anlegen")
+            
+            if submit_new:
+                if not new_code or not new_name:
+                    st.error("Bitte Code und Firmenname ausfüllen!")
+                else:
+                    if supabase:
+                        try:
+                            supabase.table("company_profiles").insert({
+                                "company_code": new_code,
+                                "company_name": new_name,
+                                "datev_user": d_user_new,
+                                "datev_berater": d_berater_new,
+                                "datev_klient": d_klient_new
+                            }).execute()
+                            st.success(f"Mandant '{new_code}' ({new_name}) wurde erfolgreich angelegt!")
+                        except Exception as e:
+                            st.error(f"Fehler beim Anlegen: {e}")
+        st.stop()
+
 if "selected_edit_date" not in st.session_state:
     st.session_state.selected_edit_date = None
 
