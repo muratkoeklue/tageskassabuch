@@ -36,6 +36,7 @@ st.markdown("""
 
 UPLOAD_DIR = "belege_uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+RECEIPTS_BUCKET = "kassabuch-belege"  # Einmalig in Supabase Storage als privaten Bucket anlegen
 
 # --- SUPABASE DATENBANK VERBINDUNG ---
 @st.cache_resource
@@ -108,16 +109,41 @@ def generate_multi_day_pdf(period_df):
         
         receipts = data.get("receipt_items", []) or []
         for rec in receipts:
+            # Neue Belege werden in Supabase Storage gespeichert. Alte lokale Pfade
+            # werden weiterhin unterstützt, sofern die Datei noch vorhanden ist.
+            image_source = None
+            storage_path = rec.get("storage_path", "")
             f_path = rec.get("path", "")
-            if f_path and os.path.exists(f_path):
-                elements.append(PageBreak())
-                elements.append(Paragraph(f"<b>Beleg zu Tag {date_formatted}: {rec['name']} | Betrag: {float(rec['amount']):.2f} €</b>", styles['Heading2']))
-                elements.append(Spacer(1, 10))
+            load_error = None
+
+            if storage_path and supabase:
                 try:
-                    img = RLImage(f_path, width=400, height=520)
+                    image_bytes = supabase.storage.from_(RECEIPTS_BUCKET).download(storage_path)
+                    image_source = io.BytesIO(image_bytes)
+                except Exception as e:
+                    load_error = str(e)
+
+            if image_source is None and f_path and os.path.exists(f_path):
+                image_source = f_path
+
+            elements.append(PageBreak())
+            elements.append(Paragraph(
+                f"<b>Beleg zu Tag {date_formatted}: {rec.get('name', 'Einkaufsbeleg')} | Betrag: {float(rec.get('amount', 0) or 0):.2f} €</b>",
+                styles['Heading2']
+            ))
+            elements.append(Spacer(1, 10))
+            if image_source is not None:
+                try:
+                    img = RLImage(image_source, width=400, height=520, kind='proportional')
                     elements.append(img)
                 except Exception as e:
-                    elements.append(Paragraph(f"<i>[Bild konnte nicht geladen werden: {e}]</i>", styles['Normal']))
+                    elements.append(Paragraph(f"<i>[Bild konnte nicht dargestellt werden: {e}]</i>", styles['Normal']))
+            else:
+                detail = f" (Speicherfehler: {load_error})" if load_error else ""
+                elements.append(Paragraph(
+                    f"<i>[Rechnungsfoto ist in der Datenbank vermerkt, konnte aber nicht geladen werden{detail}. Bitte den Beleg erneut hochladen.]</i>",
+                    styles['Normal']
+                ))
 
     doc.build(elements)
     buffer.seek(0)
@@ -559,13 +585,32 @@ with st.sidebar.expander("📸 Einkaufsbelege hochladen"):
         input_beleg_betrag = st.number_input("Rechnungsbetrag (€)", value=0.0, step=5.0, format="%.2f", key=f"amt_{uploaded_single_file.name}")
         col_btn1, col_btn2 = st.columns(2)
         if col_btn1.button("✅ Ablegen"):
-            file_path = os.path.join(UPLOAD_DIR, f"{company_code_input}_{date_str}_{datetime.now().strftime('%H%M%S')}_{uploaded_single_file.name}")
-            pil_img.save(file_path)
-            st.session_state.temp_receipts[date_str].append({
-                "path": file_path, "amount": input_beleg_betrag, "name": uploaded_single_file.name
-            })
-            st.success("Beleg gespeichert!")
-            st.rerun()
+            # Einheitliches JPEG-Format und dauerhafte Speicherung in Supabase Storage.
+            image_buffer = io.BytesIO()
+            pil_img.save(image_buffer, format="JPEG", quality=90, optimize=True)
+            image_bytes = image_buffer.getvalue()
+            safe_name = os.path.basename(uploaded_single_file.name).replace("/", "_").replace("\\", "_")
+            storage_path = f"{company_code_input}/{date_str}/{datetime.now().strftime('%H%M%S%f')}_{safe_name}.jpg"
+            try:
+                if not supabase:
+                    raise RuntimeError("Supabase ist nicht verbunden; der Beleg kann nicht dauerhaft gespeichert werden.")
+                supabase.storage.from_(RECEIPTS_BUCKET).upload(
+                    storage_path,
+                    image_bytes,
+                    file_options={"content-type": "image/jpeg", "upsert": "true"}
+                )
+                st.session_state.temp_receipts[date_str].append({
+                    "storage_path": storage_path,
+                    "amount": input_beleg_betrag,
+                    "name": uploaded_single_file.name
+                })
+                st.success("Beleg dauerhaft in Supabase gespeichert!")
+                st.rerun()
+            except Exception as e:
+                st.error(
+                    f"Beleg konnte nicht dauerhaft gespeichert werden: {e}. "
+                    f"Bitte prüfen, ob in Supabase Storage der Bucket '{RECEIPTS_BUCKET}' angelegt ist."
+                )
         if col_btn2.button("❌ Verwerfen"):
             st.rerun()
 
