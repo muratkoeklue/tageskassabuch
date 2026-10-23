@@ -76,8 +76,7 @@ def generate_multi_day_pdf(period_df):
             ["Anfangsstand - Übertrag v. Vortag", f"{float(data['anfangsstand']):.2f}", notes.get("anfangsstand", "")],
             ["Tageslosung (Brutto)", f"{float(data['tageslosung']):.2f}", notes.get("tageslosung", "")],
             ["Bareinlage (Hinzurechnung)", f"{float(data.get('bareinlage', 0.0)):.2f}", notes.get("bareinlage", "")],
-            ["bar kassiert bereits bonierte", f"{float(data['bar_boniert']):.2f}", notes.get("bar_boniert", "")],
-            ["Essensbons oder Überweisung", f"{float(data['essensbons_ueberweisung']):.2f}", notes.get("essensbons_ueb", "")],
+            ["bar kassiert bereits bonierte Essensbons oder Überweisung", f"{float(data.get('bar_boniert', 0) or 0) + float(data.get('essensbons_ueberweisung', 0) or 0):.2f}", notes.get("bar_boniert_essensbons_ueberweisung", notes.get("bar_boniert", "") or notes.get("essensbons_ueb", ""))],
             ["abzüglich Bankomatkasse", f"-{float(data['bankomatkasse']):.2f}", notes.get("bankomatkasse", "")],
             ["abzüglich unbar Überweisung", f"-{float(data['unbar_ueberweisung']):.2f}", notes.get("unbar_ueb", "")],
             ["abzüglich Essenbons", f"-{float(data['essenbons']):.2f}", notes.get("essenbons", "")],
@@ -211,7 +210,7 @@ def generate_datev_at_csv(period_df, user_val, berater_val, klient_val, start_d,
     # 5, 9, 13, 15, 19 und 114 müssen bei jedem Buchungssatz "0" enthalten.
     fixed_zero_columns = (5, 9, 13, 15, 19, 114)
 
-    def add_booking(amount, sh, account, counter_account, booking_date, text):
+    def add_booking(amount, sh, counter_account, booking_date, text):
         amount = float(amount or 0)
         if amount <= 0:
             return
@@ -220,7 +219,7 @@ def generate_datev_at_csv(period_df, user_val, berater_val, klient_val, start_d,
         row[0] = f"{amount:.2f}".replace(".", ",")  # Spalte 1: Umsatz
         row[1] = sh                                 # Spalte 2: Soll/Haben
         row[2] = "EUR"                              # Spalte 3: Währung
-        row[6] = str(account)                        # Spalte 7: Konto
+        row[6] = "2700"                             # Spalte 7: Konto immer 2700
         row[7] = str(counter_account)               # Spalte 8: Gegenkonto
         row[9] = pd.to_datetime(booking_date).strftime("%d%m")  # Spalte 10
         row[10] = str(booking_date).replace("-", "")            # Spalte 11
@@ -235,34 +234,39 @@ def generate_datev_at_csv(period_df, user_val, berater_val, klient_val, start_d,
         datum = r["datum"]
         datum_text = str(datum)
 
-        # Einnahmen / Hinzurechnungen
-        add_booking(r.get("tageslosung", 0), "S", "4000", "2772",
+        # Alle Buchungssätze verwenden im DATEV-Feld "Konto" immer 2700.
+        # Die jeweiligen Gegenkonten werden im Feld "Gegenkonto" ausgegeben.
+        add_booking(r.get("tageslosung", 0), "S", "2772",
                     datum, f"Tageslosung {datum_text}")
-        add_booking(r.get("bareinlage", 0), "S", "9000", "9120",
+        add_booking(r.get("bareinlage", 0), "S", "9120",
                     datum, f"Bareinlage {datum_text}")
 
-        # Bereits bonierte Barumsätze bzw. Essensbons/Überweisungen
-        add_booking(r.get("bar_boniert", 0), "H", "2700", "2881",
-                    datum, f"Bar kassiert bereits boniert {datum_text}")
-        add_booking(r.get("essensbons_ueberweisung", 0), "H", "2700", "2881",
-                    datum, f"Essensbons oder Überweisung {datum_text}")
+        # Diese beiden Eingabefelder bilden im DATEV-Export eine gemeinsame Zeile.
+        bereits_boniert_gesamt = (
+            float(r.get("bar_boniert", 0) or 0)
+            + float(r.get("essensbons_ueberweisung", 0) or 0)
+        )
+        add_booking(
+            bereits_boniert_gesamt, "H", "2881", datum,
+            f"bar kassiert bereits bonierte Essensbons oder Überweisung {datum_text}"
+        )
 
         # Abzüge / Ausgaben
-        add_booking(r.get("bankomatkasse", 0), "H", "2700", "2882",
+        add_booking(r.get("bankomatkasse", 0), "H", "2882",
                     datum, f"Bankomatkasse {datum_text}")
-        add_booking(r.get("unbar_ueberweisung", 0), "H", "2700", "2881",
+        add_booking(r.get("unbar_ueberweisung", 0), "H", "2881",
                     datum, f"Unbare Überweisung {datum_text}")
-        add_booking(r.get("essenbons", 0), "H", "2700", "2881",
+        add_booking(r.get("essenbons", 0), "H", "2881",
                     datum, f"Essensbons {datum_text}")
-        add_booking(r.get("trinkgeld_ma", 0), "H", "2700", "6710",
+        add_booking(r.get("trinkgeld_ma", 0), "H", "6710",
                     datum, f"Trinkgeld Mitarbeiter {datum_text}")
-        add_booking(r.get("gaestereklamation", 0), "H", "2700", "7655",
+        add_booking(r.get("gaestereklamation", 0), "H", "7655",
                     datum, f"Gästereklamation {datum_text}")
-        add_booking(r.get("einkauf", 0), "H", "2700", "2775",
+        add_booking(r.get("einkauf", 0), "H", "2775",
                     datum, f"Einkauf / Barauslagen {datum_text}")
-        add_booking(r.get("loehne_vorschuesse", 0), "H", "2700", "3745",
+        add_booking(r.get("loehne_vorschuesse", 0), "H", "3745",
                     datum, f"Mitarbeiter Löhne/Vorschüsse {datum_text}")
-        add_booking(r.get("einzahlung_bank", 0), "H", "2700", "2880",
+        add_booking(r.get("einzahlung_bank", 0), "H", "2880",
                     datum, f"Einzahlung an Bank {datum_text}")
 
     return "\n".join(lines)
@@ -426,8 +430,12 @@ if st.session_state.get("current_date_str") != date_str:
         st.session_state.inp_anfangsstand = float(saved.get("anfangsstand", 0.0))
         st.session_state.inp_tageslosung = float(saved.get("tageslosung", 0.0))
         st.session_state.inp_bareinlage = float(saved.get("bareinlage", 0.0))
-        st.session_state.inp_bar_boniert = float(saved.get("bar_boniert", 0.0))
-        st.session_state.inp_essensbons_ueb = float(saved.get("essensbons_ueberweisung", 0.0))
+        # Alte Tagesblätter hatten zwei Felder. Für die neue einzelne Eingabe
+        # werden beide vorhandenen Beträge addiert.
+        st.session_state.inp_bar_boniert_gesamt = (
+            float(saved.get("bar_boniert", 0.0) or 0.0)
+            + float(saved.get("essensbons_ueberweisung", 0.0) or 0.0)
+        )
         st.session_state.inp_bankomatkasse = float(saved.get("bankomatkasse", 0.0))
         st.session_state.inp_unbar_ueb = float(saved.get("unbar_ueberweisung", 0.0))
         st.session_state.inp_essenbons = float(saved.get("essenbons", 0.0))
@@ -441,8 +449,7 @@ if st.session_state.get("current_date_str") != date_str:
         st.session_state.inp_anfangsstand = float(auto_anfangsstand)
         st.session_state.inp_tageslosung = 0.0
         st.session_state.inp_bareinlage = 0.0
-        st.session_state.inp_bar_boniert = 0.0
-        st.session_state.inp_essensbons_ueb = 0.0
+        st.session_state.inp_bar_boniert_gesamt = 0.0
         st.session_state.inp_bankomatkasse = 0.0
         st.session_state.inp_unbar_ueb = 0.0
         st.session_state.inp_essenbons = 0.0
@@ -585,8 +592,7 @@ header_container = st.container()
 anfangsstand = float(st.session_state.get("inp_anfangsstand", auto_anfangsstand))
 tageslosung = float(st.session_state.get("inp_tageslosung", 0.0))
 bareinlage = float(st.session_state.get("inp_bareinlage", 0.0))
-bar_boniert = float(st.session_state.get("inp_bar_boniert", 0.0))
-essensbons_ueb = float(st.session_state.get("inp_essensbons_ueb", 0.0))
+bar_boniert_gesamt = float(st.session_state.get("inp_bar_boniert_gesamt", 0.0))
 
 bankomatkasse = float(st.session_state.get("inp_bankomatkasse", 0.0))
 unbar_ueb = float(st.session_state.get("inp_unbar_ueb", 0.0))
@@ -598,7 +604,7 @@ barentnahme = float(st.session_state.get("inp_barentnahme", 0.0))
 loehne_vorschuesse = float(st.session_state.get("inp_loehne_vorschuesse", 0.0))
 einzahlung_bank = float(st.session_state.get("inp_einzahlung_bank", 0.0))
 
-live_zwischenstand = (anfangsstand + tageslosung + bareinlage + bar_boniert + essensbons_ueb 
+live_zwischenstand = (anfangsstand + tageslosung + bareinlage + bar_boniert_gesamt
                      - bankomatkasse - unbar_ueb - essenbons - trinkgeld_ma 
                      - gaestereklamation - einkauf - barentnahme - loehne_vorschuesse)
 live_endstand = live_zwischenstand - einzahlung_bank
@@ -638,15 +644,20 @@ with col2:
 
 col1, col2 = st.columns([1, 1])
 with col1:
-    bar_boniert = st.number_input("bar kassiert bereits bonierte (€)", key="inp_bar_boniert", step=10.0)
+    bar_boniert_gesamt = st.number_input(
+        "bar kassiert bereits bonierte Essensbons oder Überweisung (€)",
+        key="inp_bar_boniert_gesamt", step=10.0
+    )
 with col2:
-    note_bar_boniert = st.text_input("Bemerkung zu bar boniert", value=st.session_state.inp_notes_dict.get("bar_boniert", ""), key="note_bar_boniert")
-
-col1, col2 = st.columns([1, 1])
-with col1:
-    essensbons_ueb = st.number_input("Essensbons oder Überweisung (€)", key="inp_essensbons_ueb", step=10.0)
-with col2:
-    note_essensbons_ueb = st.text_input("Bemerkung zu Essensbons/Überw.", value=st.session_state.inp_notes_dict.get("essensbons_ueb", ""), key="note_essensbons_ueb")
+    alte_bemerkung = (
+        st.session_state.inp_notes_dict.get("bar_boniert_essensbons_ueberweisung", "")
+        or st.session_state.inp_notes_dict.get("bar_boniert", "")
+        or st.session_state.inp_notes_dict.get("essensbons_ueb", "")
+    )
+    note_bar_boniert_gesamt = st.text_input(
+        "Bemerkung zu bar kassiert / Essensbons / Überweisung",
+        value=alte_bemerkung, key="note_bar_boniert_gesamt"
+    )
 
 st.markdown("---")
 st.markdown("#### 2. Ausgaben, Abzüge & Entnahmen")
@@ -714,8 +725,7 @@ if save_trigger:
         "anfangsstand": note_anfangsstand,
         "tageslosung": note_tageslosung,
         "bareinlage": note_bareinlage,
-        "bar_boniert": note_bar_boniert,
-        "essensbons_ueb": note_essensbons_ueb,
+        "bar_boniert_essensbons_ueberweisung": note_bar_boniert_gesamt,
         "bankomatkasse": note_bankomatkasse,
         "unbar_ueb": note_unbar_ueb,
         "essenbons": note_essenbons,
@@ -733,8 +743,8 @@ if save_trigger:
         "anfangsstand": anfangsstand,
         "tageslosung": tageslosung,
         "bareinlage": bareinlage,
-        "bar_boniert": bar_boniert,
-        "essensbons_ueberweisung": essensbons_ueb,
+        "bar_boniert": bar_boniert_gesamt,
+        "essensbons_ueberweisung": 0.0,
         "bankomatkasse": bankomatkasse,
         "unbar_ueberweisung": unbar_ueb,
         "essenbons": essenbons,
